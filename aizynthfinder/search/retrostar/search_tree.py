@@ -170,7 +170,7 @@ class SearchTree(AndOrSearchTreeBase):
             if not reactions:
                 continue
 
-            costs = -np.log(np.clip(priors, 1e-3, 1.0))
+            costs = -np.log(priors)
             reactions_to_expand = []
             reaction_costs = []
             for reaction, cost in zip(reactions, costs):
