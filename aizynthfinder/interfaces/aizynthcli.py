@@ -261,50 +261,54 @@ def _process_multi_smiles(
             if key != "processed_smiles"
         }
     time0 = time.time()
-    for idx, smi in enumerate(smiles):
+    src_model_batch_sz = 3
+    smi_chunks = [smiles[i:i + src_model_batch_sz] for i in range(0, len(smiles), src_model_batch_sz)]
+    for idx, smi_chunk in enumerate(smi_chunks):
         if pre_processing:
             pre_processing(finder, idx)
         processed_results = {}
-        finder.target_smiles = smi
+        joined_smi = ".".join(smi_chunk)
+        finder.target_smiles = joined_smi
         try:
             finder.prepare_tree()
         except ValueError as err:
-            print(f"Failed to setup search for {smi} due to: '{str(err).lower()}'")
+            print(f"Failed to setup search for {joined_smi} due to: '{str(err).lower()}'")
             continue
-        search_time, iterations_num, is_solved = finder.tree_search()
+        search_time, iterations_num, is_solved_list = finder.tree_search()
+        for root_id, is_solved in enumerate(is_solved_list):
+            smi = finder.tree.root[root_id].mol.smiles
+            solved_str = "is solved" if is_solved else "is not solved" ###
+            logger().info(f"Done with {smi} for {iterations_num} iters in {search_time:.3} s and {solved_str}") ###
+            if is_solved:
+                finder.build_routes(root_id=root_id)
+                finder.routes.compute_scores(*finder.scorers.objects())
+                stats = finder.extract_statistics(root_id=root_id)
 
-        solved_str = "is solved" if is_solved else "is not solved" ###
-        logger().info(f"Done with {smi} for {iterations_num} iters in {search_time:.3} s and {solved_str}") ###
-        if is_solved:
-            finder.build_routes()
-            finder.routes.compute_scores(*finder.scorers.objects())
-            stats = finder.extract_statistics()
-
-            if do_clustering:
-                _do_clustering(
-                    finder, stats, detailed_results=True, model_path=route_distance_model
-                )
-            _do_post_processing(finder, stats, post_processing)
-
-            for key, value in stats.items():
-                processed_results[key] = value
-            processed_results["stock_info"] = finder.stock_info()
-            processed_results["trees"] = finder.routes.dict_with_extra(
-                include_metadata=True, include_scores=True
-            )
-
-            if checkpoint:
-                with open(checkpoint, "a") as checkpoint_file:
-                    checkpoint_file.write(
-                        json.dumps({"processed_smiles": smi, "results": processed_results})
-                        + "\n"
+                if do_clustering:
+                    _do_clustering(
+                        finder, stats, detailed_results=True, model_path=route_distance_model
                     )
-                logger().debug(
-                    f"Results for processed smiles '{smi}' saved to {checkpoint}"
+                _do_post_processing(finder, stats, post_processing)
+
+                for key, value in stats.items():
+                    processed_results[key] = value
+                processed_results["stock_info"] = finder.stock_info()
+                processed_results["trees"] = finder.routes.dict_with_extra(
+                    include_metadata=True, include_scores=True
                 )
 
-            for key, value in processed_results.items():
-                results[key].append(value)
+                if checkpoint:
+                    with open(checkpoint, "a") as checkpoint_file:
+                        checkpoint_file.write(
+                            json.dumps({"processed_smiles": smi, "results": processed_results})
+                            + "\n"
+                        )
+                    logger().debug(
+                        f"Results for processed smiles '{smi}' saved to {checkpoint}"
+                    )
+
+                for key, value in processed_results.items():
+                    results[key].append(value)
 
     data = pd.DataFrame.from_dict(results)
     save_datafile(data, output_name)

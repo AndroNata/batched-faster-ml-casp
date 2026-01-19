@@ -110,6 +110,7 @@ class AiZynthFinder:
 
     def build_routes(
         self,
+        root_id: int,
         selection: Optional[RouteSelectionArguments] = None,
         scorer: Optional[Union[str, List[str]]] = None,
     ) -> None:
@@ -123,7 +124,7 @@ class AiZynthFinder:
         :param scorer: a reference to the object used to score the nodes, can be a list
         :raises ValueError: if the search tree not initialized
         """
-        self.analysis = self._setup_analysis(scorer=scorer)
+        self.analysis = self._setup_analysis(scorer=scorer, root_id=root_id)
         config_selection = RouteSelectionArguments(
             nmin=self.config.post_processing.min_routes,
             nmax=self.config.post_processing.max_routes,
@@ -133,12 +134,12 @@ class AiZynthFinder:
             self.analysis, selection or config_selection
         )
 
-    def extract_statistics(self) -> StrDict:
+    def extract_statistics(self, root_id: int) -> StrDict:
         """Extracts tree statistics as a dictionary"""
         if not self.analysis:
             return {}
         stats = {
-            "target": self.target_smiles,
+            "target": self.target_smiles.split(".")[root_id],
             "search_time": self.search_stats["time"],
             "first_solution_time": self.search_stats.get("first_solution_time", 0),
             "first_solution_iteration": self.search_stats.get(
@@ -227,7 +228,8 @@ class AiZynthFinder:
             self.search_stats["iterations"] += 1
 
             try:
-                is_solved = self.tree.one_iteration()
+                is_solved_list = self.tree.one_iteration()
+                is_solved = all(is_solved_list)
             except StopIteration:
                 is_solved = False
                 break
@@ -249,7 +251,7 @@ class AiZynthFinder:
         time_past = time.time() - time0
         self._logger.debug("Search completed")
         self.search_stats["time"] = time_past
-        return time_past, self.search_stats["iterations"], is_solved
+        return time_past, self.search_stats["iterations"], is_solved_list
 
     def _setup_focussed_bonds(self, target_mol: Molecule) -> None:
         """
@@ -296,6 +298,7 @@ class AiZynthFinder:
     def _setup_analysis(
         self,
         scorer: Optional[Union[str, List[str]]],
+        root_id: int
     ) -> TreeAnalysis:
         """Configure TreeAnalysis
 
@@ -335,7 +338,7 @@ class AiZynthFinder:
                 )
             ]
 
-        return TreeAnalysis(self.tree, scorers)
+        return TreeAnalysis(self.tree, root_id, scorers)
 
 
 class AiZynthExpander:

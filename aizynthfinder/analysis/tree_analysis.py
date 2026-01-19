@@ -54,6 +54,7 @@ class TreeAnalysis:
     def __init__(
         self,
         search_tree: Union[MctsSearchTree, AndOrSearchTreeBase],
+        root_id: int,
         scorer: Optional[Union[Scorer, List[Scorer]]] = None,
     ) -> None:
         self.search_tree = search_tree
@@ -64,6 +65,7 @@ class TreeAnalysis:
             self.scorers = [scorer]
         self._direction = "max"  # current implementation assumes maximisation
         self._single_objective = len(self.scorers) == 1
+        self.root_id = root_id
 
     def best(self) -> _Solution:
         """
@@ -81,7 +83,7 @@ class TreeAnalysis:
             sorted_nodes, _, _ = self.scorers[0].sort(nodes)
             return sorted_nodes[0]
 
-        sorted_routes, _, _ = self.scorers[0].sort(self.search_tree.routes())
+        sorted_routes, _, _ = self.scorers[0].sort(self.search_tree.routes(self.root_id))
         return sorted_routes[0]
 
     def pareto_front(self) -> Tuple[_Solution, ...]:
@@ -97,7 +99,7 @@ class TreeAnalysis:
         if isinstance(self.search_tree, MctsSearchTree):
             solutions = self.search_tree.nodes()
         else:
-            solutions = self.search_tree.routes()  # type: ignore
+            solutions = self.search_tree.routes(self.root_id)  # type: ignore
 
         scores_arr = np.array(
             [[scorer(solution) for scorer in self.scorers] for solution in solutions]
@@ -134,7 +136,7 @@ class TreeAnalysis:
             actions = [node.actions_to() for node in sorted_items]
 
         else:
-            sorted_items, sorted_scores, _ = scorer.sort(self.search_tree.routes())
+            sorted_items, sorted_scores, _ = scorer.sort(self.search_tree.routes(self.root_id))
             actions = [route.reactions() for route in sorted_items]
 
         scores = [{repr(scorer): score} for score in sorted_scores]
@@ -171,7 +173,7 @@ class TreeAnalysis:
         if isinstance(self.search_tree, MctsSearchTree):
             solutions = self._all_nodes()
         else:
-            solutions = self.search_tree.routes()  # type: ignore
+            solutions = self.search_tree.routes(self.root_id)  # type: ignore
 
         scores_arr = np.array(
             [[scorer(solution) for scorer in self.scorers] for solution in solutions]
@@ -215,7 +217,7 @@ class TreeAnalysis:
             ", ".join(mol.smiles for mol in route.leafs() if not route.in_stock(mol))  # type: ignore
             for route in top_routes
         )
-        all_routes = self.search_tree.routes()
+        all_routes = self.search_tree.routes(self.root_id)
         policy_used_counts = self._policy_used_statistics(
             [reaction for route in all_routes for reaction in route.reactions()]
         )
@@ -238,12 +240,12 @@ class TreeAnalysis:
             top_score = None
 
         return {
-            "number_of_nodes": len(self.search_tree.mol_nodes),
+            "number_of_nodes": len(self.search_tree.mol_nodes[self.root_id]),
             "max_transforms": max(
-                node.prop["mol"].transform for node in self.search_tree.mol_nodes
+                node.prop["mol"].transform for node in self.search_tree.mol_nodes[self.root_id]
             ),
             "max_children": max(
-                len(node.children) for node in self.search_tree.mol_nodes
+                len(node.children) for node in self.search_tree.mol_nodes[self.root_id]
             ),
             "number_of_routes": len(all_routes),
             "number_of_solved_routes": sum(route.is_solved for route in all_routes),

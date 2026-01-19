@@ -36,15 +36,20 @@ class SearchTree(AndOrSearchTreeBase):
         self, config: Configuration, root_smiles: Optional[str] = None
     ) -> None:
         super().__init__(config, root_smiles)
-        self._mol_nodes: List[MoleculeNode] = []
+        self._mol_nodes: List[List[MoleculeNode]] = []
         self._logger = logger()
         self.molecule_cost = MoleculeCost(config)
+        self.root_slvd_bool_l = []
 
         if root_smiles:
-            self.root: Optional[MoleculeNode] = MoleculeNode.create_root(
-                root_smiles, config, self.molecule_cost
-            )
-            self._mol_nodes.append(self.root)
+            self.root = []
+            for root_smi in root_smiles.split("."):
+                current_root = MoleculeNode.create_root(
+                    root_smi, config, self.molecule_cost
+                )
+                self.root.append(current_root)
+                self.root_slvd_bool_l.append(False)
+                self._mol_nodes.append([current_root])
         else:
             self.root = None
 
@@ -56,6 +61,7 @@ class SearchTree(AndOrSearchTreeBase):
         }
         self.retro_bm_wdth = config.search.retro_bm_width
         print("\n Retrostar search algorithm beam width ", self.retro_bm_wdth)
+        self.route_group_done = []
 
     @classmethod
     def from_json(cls, filename: str, config: Configuration) -> SearchTree:
@@ -106,30 +112,33 @@ class SearchTree(AndOrSearchTreeBase):
 
         self._routes = []
         
-        next_node_list = self._select()
+        selected_nodes_and_root_ids = self._select()
 
-        if next_node_list  is None or len(next_node_list)==0:
+        if selected_nodes_and_root_ids is None:
             self._logger.debug("No expandable nodes in Retro* iteration")
             raise StopIteration
+        next_node_list, root_id_list = selected_nodes_and_root_ids
 
-        self._expand(next_node_list)
+        self._expand(next_node_list, root_id_list)
         for next_node in next_node_list:
             if not next_node.children:
                 next_node.expandable = False
 
             self._update(next_node)
-        return self.root.solved
+        self.root_slvd_bool_l = [r.solved for r in self.root]
+        return self.root_slvd_bool_l
 
-    def routes(self) -> List[ReactionTree]:
+    def routes(self, root_id: int) -> List[ReactionTree]:
         """
         Extracts and returns routes from the AND/OR tree
 
         :return: the routes
         """
-        if self.root is None:
-            return []
-        if not self._routes:
-            self._routes = SplitAndOrTree(self.root, self.config.stock).routes
+        if root_id in self.route_group_done:
+            assert self._routes is not None
+        else:
+            self._routes = SplitAndOrTree(self.root[root_id], self.config.stock).routes
+            self.route_group_done.append(root_id)
         return self._routes
 
     def serialize(self, filename: str) -> None:
@@ -147,17 +156,19 @@ class SearchTree(AndOrSearchTreeBase):
         with open(filename, "w") as fileobj:
             json.dump(dict_, fileobj, indent=2)
 
-    def _expand(self, node_list: MoleculeNode) -> None:
+    def _expand(self, node_list: MoleculeNode, root_id_list: List[int]) -> None:
         batch_reactions, batch_priors = self.config.expansion_policy([node.mol for node in node_list])
+        assert len(node_list) == len(root_id_list)
 
         for i in range(len(node_list)):
+            root_id = root_id_list[i]
             node = node_list[i]
             reactions = batch_reactions[i]
             priors = batch_priors[i]
             self.profiling["expansion_calls"] += 1
 
             if not reactions:
-                return
+                continue
 
             costs = -np.log(np.clip(priors, 1e-3, 1.0))
             reactions_to_expand = []
@@ -179,7 +190,7 @@ class SearchTree(AndOrSearchTreeBase):
 
             for cost, rxn in zip(reaction_costs, reactions_to_expand):
                 new_nodes = node.add_stub(cost, rxn)
-                self._mol_nodes.extend(new_nodes)
+                self._mol_nodes[root_id].extend(new_nodes)
 
     def _filter_reaction(self, reaction: RetroReaction) -> bool:
         if not self.config.filter_policy.selection:
@@ -192,16 +203,28 @@ class SearchTree(AndOrSearchTreeBase):
         return False
 
     def _select(self) -> Optional[MoleculeNode]:
-        scores = np.asarray(
-            [
-                node.target_value for node in self._mol_nodes if node.expandable
-            ]
-        )
-        if len(scores) == 0:
-            return None
-        idx = [i for i in range(len(self._mol_nodes)) if self._mol_nodes[i].expandable]
+        selected_nodes = []
+        root_id_list = []
 
-        return [self._mol_nodes[idx[i]] for i in np.argsort(scores)[:self.retro_bm_wdth]]
+        for root_id, mol_nodes_l in enumerate(self._mol_nodes):
+            if self.root_slvd_bool_l[root_id] is True:
+                continue
+            scores = np.asarray(
+                [
+                    node.target_value for node in mol_nodes_l if node.expandable
+                ]
+            )
+            if len(scores) == 0:
+                continue
+
+            idx = [i for i in range(len(mol_nodes_l)) if mol_nodes_l[i].expandable]
+
+            selected_nodes.append(mol_nodes_l[idx[np.argsort(scores)[0]]])
+            root_id_list.append(root_id)
+
+        if len(selected_nodes) == 0:
+            return None
+        return selected_nodes, root_id_list
 
     @staticmethod
     def _update(node: MoleculeNode) -> None:

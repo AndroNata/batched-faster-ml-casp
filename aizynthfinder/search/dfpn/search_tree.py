@@ -108,7 +108,7 @@ class SearchTree(AndOrSearchTreeBase):
 
         return found_solution
 
-    def routes(self) -> List[ReactionTree]:
+    def routes(self, root_id=None) -> List[ReactionTree]:
         """
         Extracts and returns routes from the AND/OR tree
 
